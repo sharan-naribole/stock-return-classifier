@@ -1,0 +1,41 @@
+{
+  "_comment": "Data configuration \u2014 dry run (3-year window, fast settings)",
+  "ticker": "SPY",
+  "start_date": "2021-01-01",
+  "end_date": "auto",
+  "data": {
+    "features": {
+      "bollinger_period": 20,
+      "bollinger_std": 2,
+      "ema_short": 8,
+      "ema_medium": 21,
+      "adx_period": 14,
+      "rsi_period": 14,
+      "macd_fast": 12,
+      "macd_slow": 26,
+      "macd_signal": 9,
+      "stoch_period": 14,
+      "stoch_smooth": 3,
+      "roc_short": 3,
+      "roc_long": 5,
+      "atr_period": 14
+    },
+    "normalization": "rolling",
+    "normalization_window": 63
+  },
+  "target": {
+    "horizon_days": 1,
+    "return_threshold_pct": 1.0
+  },
+  "split": {
+    "test_years": 1,
+    "validation_type": "expanding",
+    "n_folds": 3,
+    "sliding_window_years": 1
+  },
+  "output": {
+    "data_dir": "data",
+    "results_dir": "results",
+    "models_dir": "models"
+  }
+}
