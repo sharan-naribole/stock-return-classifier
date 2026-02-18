@@ -9,7 +9,7 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
 
-BINARY_COLS = ["Market_Trend", "target"]  # columns excluded from normalization
+BINARY_COLS = ["Market_Trend", "target", "forward_return"]  # columns excluded from normalization
 
 
 class Normalizer:

@@ -37,6 +37,7 @@ class TargetCreator:
         close = df["Close"]
         future_close = close.shift(-self.horizon_days)
         forward_return = (future_close - close) / close * 100
+        df["forward_return"] = forward_return
         df["target"] = (forward_return >= self.return_threshold_pct).astype(int)
         df = df.iloc[:-self.horizon_days].copy()
         return df

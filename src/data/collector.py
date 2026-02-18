@@ -131,8 +131,8 @@ class DataCollector:
         return combined
 
     def collect_data(self) -> pd.DataFrame:
-        """Main entry point: collect and combine SPY + VIX data."""
-        print(f"Collecting SPY data ({self.start_date} to {self.end_date})...")
+        """Main entry point: collect and combine ticker + VIX data."""
+        print(f"Collecting {self.ticker} data ({self.start_date} to {self.end_date})...")
         spy_df = self.collect_spy()
         print(f"Collecting VIX data ({self.start_date} to {self.end_date})...")
         vix_df = self.collect_vix()

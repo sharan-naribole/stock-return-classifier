@@ -15,7 +15,7 @@ from sklearn.metrics import f1_score, accuracy_score, roc_auc_score, precision_s
 from xgboost import XGBClassifier
 
 
-FEATURE_COLS_EXCLUDE = ["target", "Adj_Close"]
+FEATURE_COLS_EXCLUDE = ["target", "forward_return", "Adj_Close"]
 
 
 def get_feature_cols(df: pd.DataFrame) -> List[str]:
@@ -49,6 +49,22 @@ class ModelTrainer:
         self.config = config
         self.eval_metric = config.get("eval_metric") or "f1"
         self.models_config = config.get("models") or {}
+        self.fp_loss_weight = config.get("fp_loss_weight") or 1.0
+
+    def _compute_sample_weights(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        Compute per-sample weights for asymmetric FP cost.
+
+        Class 1 (target=1): weight = 1.0
+        Class 0, forward_return < 0%: weight = fp_loss_weight (penalize losses more)
+        Class 0, forward_return >= 0%: weight = 1.0 (near-miss, less penalty)
+        """
+        weights = np.ones(len(df))
+        if self.fp_loss_weight <= 1.0 or "forward_return" not in df.columns:
+            return weights
+        mask = (df["target"].values == 0) & (df["forward_return"].values < 0)
+        weights[mask] = self.fp_loss_weight
+        return weights
 
     def _build_model(self, model_name: str, params: dict):
         """Instantiate a model with given hyperparameters and class imbalance settings."""
@@ -124,8 +140,9 @@ class ModelTrainer:
             X_val = val_fold[feat_cols].values
             y_val = val_fold["target"].values
 
+            sw = self._compute_sample_weights(train_fold)
             model = self._build_model(model_name, params)
-            model.fit(X_train, y_train)
+            model.fit(X_train, y_train, sample_weight=sw)
             y_pred = model.predict(X_val)
             y_prob = model.predict_proba(X_val)[:, 1]
             fold_scores.append(score(y_val, y_pred, y_prob, self.eval_metric))
@@ -160,8 +177,9 @@ class ModelTrainer:
         feat_cols = get_feature_cols(train_df)
         X_train = train_df[feat_cols].values
         y_train = train_df["target"].values
+        sw = self._compute_sample_weights(train_df)
         best_model = self._build_model(model_name, best_params)
-        best_model.fit(X_train, y_train)
+        best_model.fit(X_train, y_train, sample_weight=sw)
 
         val_metrics = {
             "best_val_" + self.eval_metric: best_score,
