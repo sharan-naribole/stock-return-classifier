@@ -1,5 +1,5 @@
 """
-Portfolio simulator — backtests 3 trading strategies + buy & hold on test data.
+Portfolio simulator — backtests 3 ML trading strategies + MACD baseline + DCA on test data.
 """
 
 from pathlib import Path
@@ -12,39 +12,49 @@ import pandas as pd
 
 class PortfolioSimulator:
     """
-    Simulates 3 trading strategies and buy & hold on the test set.
-    
-    Strategy 1: Buy max_shares when prob > 0.5, sell after 3 days
-    Strategy 2: Buy max_shares when prob >= confidence_threshold
-    Strategy 3: Variable shares based on probability bins
-    
-    All strategies have stop-loss and take-profit guardrails.
+    Simulates 3 ML trading strategies, a MACD baseline, and DCA on the test set.
+
+    ML strategies buy at close on Day N and sell at close on Day N+1
+    (hold period = horizon_days). Position size is derived from available cash.
+
+    Strategy 1: Invest 100% of cash when prob > 0.50
+    Strategy 2: Invest 100% of cash when prob >= confidence_threshold
+    Strategy 3: Invest a fraction of cash scaled by probability bin:
+                prob >= 0.875 → 100%, >= 0.750 → 75%,
+                >= 0.625 → 50%, >= 0.500 → 25%, else no trade
+    MACD:       Invest 100% of cash when MACD_hist > 0, sell 1 day later
+    DCA:        Split balance into equal portions, invest one portion at each
+                interval (weekly/monthly), buy and hold until end
     """
 
     def __init__(self, config):
         portfolio_cfg = config.get("portfolio") or {}
         self.initial_balance = portfolio_cfg.get("initial_balance", 10000)
-        self.max_shares = portfolio_cfg.get("max_shares", 10)
         self.confidence_threshold = portfolio_cfg.get("confidence_threshold", 0.6)
-        self.horizon = config.get("target.horizon_days") or 1  # hold period matches prediction horizon
+        self.horizon = config.get("target.horizon_days") or 1
 
-    def _shares_for_strategy(self, strategy: int, prob: float) -> int:
-        """Determine number of shares to buy based on strategy and probability."""
+    def _shares_for_strategy(self, strategy: int, prob: float, balance: float, price: float) -> int:
+        """Determine number of shares to buy based on strategy, probability, and available cash."""
+        if price <= 0 or balance <= 0:
+            return 0
         if strategy == 1:
-            return self.max_shares if prob > 0.5 else 0
+            fraction = 1.0 if prob > 0.5 else 0.0
         elif strategy == 2:
-            return self.max_shares if prob >= self.confidence_threshold else 0
+            fraction = 1.0 if prob >= self.confidence_threshold else 0.0
         elif strategy == 3:
             if prob >= 0.875:
-                return self.max_shares
+                fraction = 1.0
             elif prob >= 0.75:
-                return int(self.max_shares * 0.75)
+                fraction = 0.75
             elif prob >= 0.625:
-                return int(self.max_shares * 0.5)
+                fraction = 0.50
             elif prob >= 0.5:
-                return int(self.max_shares * 0.25)
-            return 0
-        return 0
+                fraction = 0.25
+            else:
+                fraction = 0.0
+        else:
+            fraction = 0.0
+        return int(balance * fraction / price)
 
     def _simulate_strategy(
         self,
@@ -53,8 +63,8 @@ class PortfolioSimulator:
         strategy: int,
     ) -> Tuple[List[float], List[dict]]:
         """
-        Simulate a single strategy.
-        
+        Simulate a single strategy (1-day hold).
+
         Returns:
             (portfolio_values list aligned to prices.index, trade_log list)
         """
@@ -65,11 +75,9 @@ class PortfolioSimulator:
         price_arr = prices.values
         dates = prices.index
 
-        # Track open positions: list of {entry_day, entry_price, shares}
         open_positions = []
 
         for i in range(n):
-            # Close positions that have reached the hold period
             closed_positions = []
             for pos in open_positions:
                 days_held = i - pos["entry_day"]
@@ -93,29 +101,22 @@ class PortfolioSimulator:
 
             open_positions = [p for p in open_positions if p not in closed_positions]
 
-            # Open new position if signal
-            if i < n - self.horizon:  # don't open new position near end
+            if i < n - self.horizon:
                 prob = probs[i]
-                shares = self._shares_for_strategy(strategy, prob)
+                shares = self._shares_for_strategy(strategy, prob, balance, price_arr[i])
                 if shares > 0:
                     cost = shares * price_arr[i]
-                    if cost > balance:  # clamp to max affordable
-                        shares = int(balance / price_arr[i])
-                        cost = shares * price_arr[i]
-                    if shares > 0:
-                        balance -= cost
-                        open_positions.append({
-                            "entry_day": i,
-                            "entry_price": price_arr[i],
-                            "shares": shares,
-                            "cost": cost,
-                        })
+                    balance -= cost
+                    open_positions.append({
+                        "entry_day": i,
+                        "entry_price": price_arr[i],
+                        "shares": shares,
+                        "cost": cost,
+                    })
 
-            # Portfolio value = cash + open position market value
             open_value = sum(p["shares"] * price_arr[i] for p in open_positions)
             portfolio_values.append(balance + open_value)
 
-        # Final: close all remaining positions at last price
         for pos in open_positions:
             proceeds = pos["shares"] * price_arr[-1]
             balance += proceeds
@@ -131,17 +132,67 @@ class PortfolioSimulator:
                 "strategy": strategy,
             })
 
-        # Trim to match prices length
         portfolio_values = portfolio_values[:n]
-
         return portfolio_values, trade_log
 
-    def _buy_and_hold(self, prices: pd.Series) -> List[float]:
-        """Buy maximum whole shares affordable on day 1, hold entire period."""
+    def _simulate_dca(
+        self,
+        prices: pd.Series,
+        frequency: str,
+    ) -> Tuple[List[float], List[dict]]:
+        """
+        Dollar-cost averaging: split initial balance into equal portions and invest
+        one portion at each interval, buying and holding until end of test period.
+
+        Args:
+            prices: Close price series
+            frequency: 'weekly' (~5 trading days) or 'monthly' (~21 trading days)
+        """
+        period = 5 if frequency == "weekly" else 21
         price_arr = prices.values
-        shares = int(self.initial_balance / price_arr[0])
-        cash = self.initial_balance - shares * price_arr[0]
-        return [cash + shares * p for p in price_arr]
+        dates = prices.index
+        n = len(price_arr)
+
+        # Determine number of buy events and equal portion per event
+        buy_days = list(range(0, n, period))
+        n_intervals = len(buy_days)
+        portion = self.initial_balance / n_intervals
+
+        remaining_cash = float(self.initial_balance)
+        shares_held = 0
+        portfolio_values = []
+        trade_log = []
+
+        for i in range(n):
+            # Buy at each DCA interval
+            if i in buy_days:
+                invest_amount = min(portion, remaining_cash)
+                shares_to_buy = int(invest_amount / price_arr[i])
+                if shares_to_buy > 0:
+                    cost = shares_to_buy * price_arr[i]
+                    remaining_cash -= cost
+                    shares_held += shares_to_buy
+                    trade_log.append({
+                        "entry_date": str(dates[i].date()),
+                        "entry_price": round(price_arr[i], 2),
+                        "shares": shares_to_buy,
+                        "cost": round(cost, 2),
+                    })
+
+            portfolio_values.append(remaining_cash + shares_held * price_arr[i])
+
+        # Finalize trade log with exit values
+        final_price = price_arr[-1]
+        for t in trade_log:
+            t["exit_date"] = str(dates[-1].date())
+            t["exit_price"] = round(final_price, 2)
+            proceeds = t["shares"] * final_price
+            t["pnl"] = round(proceeds - t["cost"], 2)
+            t["pct_return"] = round(
+                (final_price - t["entry_price"]) / t["entry_price"] * 100, 2
+            )
+
+        return portfolio_values, trade_log
 
     def _compute_sharpe(self, portfolio_values: List[float], risk_free_rate: float = 0.02) -> float:
         """Compute annualized Sharpe ratio from portfolio value series."""
@@ -184,16 +235,18 @@ class PortfolioSimulator:
         self,
         test_df: pd.DataFrame,
         y_prob: np.ndarray,
+        macd_hist: np.ndarray = None,
     ) -> Dict[str, dict]:
         """
         Run all strategies on test data.
-        
+
         Args:
             test_df: test DataFrame with 'Close' column
             y_prob: predicted probabilities (class 1)
-            
+            macd_hist: raw MACD histogram values (buy when > 0)
+
         Returns:
-            dict with results for each strategy + buy_and_hold
+            dict with results for each strategy
         """
         prices = test_df["Close"]
         results = {}
@@ -213,14 +266,26 @@ class PortfolioSimulator:
                 "summary": self._summarize(pv, tl),
             }
 
-        # Buy & Hold
-        print("  Simulating buy_and_hold...")
-        bh_values = self._buy_and_hold(prices)
-        results["buy_and_hold"] = {
-            "portfolio_values": bh_values,
-            "trade_log": [],
-            "summary": self._summarize(bh_values, []),
-        }
+        # MACD baseline — same 1-day hold, buy when MACD_hist > 0
+        if macd_hist is not None:
+            print("  Simulating macd_strategy...")
+            macd_probs = (macd_hist > 0).astype(float)
+            pv, tl = self._simulate_strategy(prices, macd_probs, 1)
+            results["macd_strategy"] = {
+                "portfolio_values": pv,
+                "trade_log": tl,
+                "summary": self._summarize(pv, tl),
+            }
+
+        # DCA — periodic buy-and-hold (weekly + monthly)
+        for freq in ["weekly", "monthly"]:
+            print(f"  Simulating dca_{freq}...")
+            pv, tl = self._simulate_dca(prices, freq)
+            results[f"dca_{freq}"] = {
+                "portfolio_values": pv,
+                "trade_log": tl,
+                "summary": self._summarize(pv, tl),
+            }
 
         return results
 
@@ -238,7 +303,9 @@ class PortfolioSimulator:
             "strategy_1_threshold_0.5": "royalblue",
             f"strategy_2_threshold_{self.confidence_threshold}": "green",
             "strategy_3_variable_shares": "orange",
-            "buy_and_hold": "gray",
+            "macd_strategy": "red",
+            "dca_weekly": "purple",
+            "dca_monthly": "magenta",
         }
 
         fig, ax = plt.subplots(figsize=(14, 7))
