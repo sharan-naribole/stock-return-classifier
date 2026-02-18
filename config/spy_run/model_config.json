@@ -1,7 +1,8 @@
 {
-  "_comment": "Model configuration for default_run",
-  "project_name": "default_run",
+  "_comment": "Model configuration for spy_run",
+  "project_name": "spy_run",
   "eval_metric": "f1",
+  "fp_loss_weight": 1.0,
   "models": {
     "logistic_regression": {
       "enabled": true,
@@ -22,8 +23,8 @@
     },
     "xgboost": {
       "enabled": true,
-      "_comment_scale_pos_weight": "3464/1368 ≈ 2.53 — recalculate if threshold changes",
-      "scale_pos_weight": 2.53,
+      "_comment_scale_pos_weight": "SPY >=1% class ratio: ~86.3% class 0 / ~13.7% class 1 ≈ 6.30 — recalculate after notebook 02",
+      "scale_pos_weight": 6.12,
       "hyperparameters": {
         "n_estimators": [50, 100, 200],
         "max_depth": [3, 5, 7],
@@ -48,7 +49,7 @@
   },
   "portfolio": {
     "initial_balance": 100000,
-    "max_shares": 1000,
-    "confidence_threshold": 0.6
+    "confidence_threshold": 0.6,
+    "dca_frequency": "weekly"
   }
 }

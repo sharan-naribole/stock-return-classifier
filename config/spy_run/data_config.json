@@ -1,5 +1,5 @@
 {
-  "_comment": "Data configuration \u2014 shared across all experiments",
+  "_comment": "Data configuration — SPY study: 1% 1-day return, 2-year test period",
   "ticker": "SPY",
   "start_date": "2006-01-01",
   "end_date": "auto",
@@ -28,7 +28,7 @@
     "return_threshold_pct": 1.0
   },
   "split": {
-    "test_years": 1,
+    "test_years": 2,
     "validation_type": "expanding",
     "n_folds": 5,
     "sliding_window_years": 3
