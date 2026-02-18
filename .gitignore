@@ -1,7 +1,7 @@
-# ── Generated data & outputs ──────────────────────────────────────────────────
-data/
-models/
-results/
+# ── Generated data & outputs (root-level only) ────────────────────────────────
+/data/
+/models/
+/results/
 
 # ── figs/ is committed — these are the illustrative figures for the README ───
 !figs/
